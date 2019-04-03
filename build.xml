@@ -1,0 +1,607 @@
+<project name="undefined" default="CheckLocalRepoStatus" basedir="." xmlns:sf="antlib:com.salesforce">
+<property file="../build.properties"/>
+<property environment="env"/>
+
+<!-- Setting default value for username, password and session id properties to empty string 
+so unset values are treated as empty. Without this, ant expressions such as ${sf.username}
+will be treated literally.
+-->
+<condition property="sf.username" value=""> <not> <isset property="sf.username"/> </not> </condition>
+<condition property="sf.password" value=""> <not> <isset property="sf.password"/> </not> </condition>
+
+<taskdef resource="com/salesforce/antlib.xml" uri="antlib:com.salesforce">
+	<classpath>
+		<pathelement location="ant-salesforce-45.jar" />
+	</classpath>
+</taskdef>
+
+<!--	Defining Marcro to execute Git command in ANT -->
+
+<macrodef name = "git">
+	<attribute name = "command" />
+	<attribute name = "dir" default = "" />
+	<element name = "args" optional = "true" />
+	<sequential>
+		<echo message = "git @{command}" />
+		<exec executable = "git" dir = "@{dir}">
+			<arg value = "@{command}" />
+			<args/>
+		</exec>
+	</sequential>
+</macrodef>
+
+<!-- Target for taking approval from user: Yes or No -->
+
+<target name="acceptparam" depends="proxy">
+
+	<input message="Do you want to continue (yes/no)?" validargs="yes,no" addproperty="userparam"/>
+	<condition property="do.cont">
+		<equals arg1="yes" arg2="${userparam}"/>
+	</condition>
+	<condition property="do.abort">
+		<equals arg1="no" arg2="${userparam}"/>
+	</condition>
+	<antcall target="if${userparam}"/>
+
+</target>
+
+<!-- Check your Local Status and let you know the updates: Checkout to Branch, pull from Devxx Remote & CheckStatus -->
+<macrodef name = "git-checkout-status">
+
+	<attribute name = "branch" />
+	<attribute name = "dest" default = ""/>
+	<sequential>
+		<git command = "checkout">
+			<args>
+				<arg value = "@{branch}"/>
+				<arg value = "@{dest}" />
+			</args>
+		</git>
+		<git command = "pull" />
+		<git command = "status" />
+	</sequential>
+</macrodef>
+
+<!-- Club all the Marcro's in One Target to make use of the Single Command -->
+
+<target name="CheckLocalRepoStatus" depends="proxy">
+	<git-checkout-status branch="${branch}" />
+</target>
+
+<!-- Checkout to Branch and pull data then will merge with Devall branch -->
+
+<macrodef name = "git-checkout-status-merge-undeploy-deploy">
+
+	<attribute name = "branch" />
+	<attribute name = "dest" default = ""/>
+	<sequential>
+		<git command = "checkout">				<!-- git checkout -->
+			<args>
+			<arg value = "@{branch}"/><!-- git checkout branchname -->
+				<arg value = "@{dest}" />
+			</args>
+		</git>
+
+		<git command = "pull" />
+		<git command = "status" />
+		<git command = "merge">
+			<args>
+				<arg value = "${RequiredBranch}" />
+			</args>
+		</git>
+	</sequential>
+</macrodef>
+
+<!-- Club all the Marcro's in One Target to make use of the Single Command -->
+
+<target name="UpgradeMySandbox" depends="proxy">
+	<!-- Merge Changes with DevAll -->
+
+	<git-checkout-status-merge-undeploy-deploy branch="${branch}" />
+
+	<!-- Undeploy Changes from destrictive Package  -->
+	<!-- Balaji commented this out. need to discuss further -->
+	<!--<sf:deploy username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" deployRoot="../PackagetoRemoveFromSandbox"/> -->
+
+	<!-- Deploy Changes from Package.xml  -->
+	<echo>Any changes on your sandbox that are not commited to GIT branch will be lost.</echo>
+	<input message="Do you still wants to continue (y/n)?" validargs="y,n,Y,N" addproperty="userparam"/>
+	<antcall target="if${userparam}"/>
+</target>
+
+<target name="DeployToMySandbox.PackagesOptional" depends="proxy">
+	<!-- Merge Changes with DevAll -->
+
+	<git-checkout-status-merge-undeploy-deploy branch="${branch}" />
+	<!-- Deploy Changes from Package.xml  -->
+	<echo>Any changes on your sandbox that are not commited to GIT branch will be lost.</echo>
+	<input message="Do you still wants to continue?" validargs="y,n,Y,N" addproperty="userparam"/>
+	<fail message="Build aborted by user">
+		<condition>
+			<or>
+				<equals arg1="n" arg2="${userparam}" />
+				<equals arg1="N" arg2="${userparam}" />
+			</or>
+		</condition>
+	</fail>
+	<antcall target="DeployPackages"/>
+	<sf:deploy username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" allowMissingFiles = "TRUE" deployRoot="/src" rollbackOnError="true"/>
+</target>
+
+<target name="DeployPackages" if="deployPackages" depends="DeployPackages.check,proxy">
+	<log message="Deploying packages..." />
+	<sf:deploy username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" deployRoot="/packages" rollbackOnError="true"/>
+	<log message="Package deploy complete." />
+</target>
+
+<macrodef name="log">
+	<attribute name="message" />
+	<sequential>
+		<local name="current_time" />
+		<tstamp>
+			<format property="current_time" pattern="HH:mm:ss" locale="en,US" />
+		</tstamp>
+		<echo message="${current_time} : @{message}"/>
+	</sequential>
+</macrodef>
+
+<macrodef name="log.input">
+	<attribute name="message" />
+	<attribute name="propertyName" />
+	<sequential>
+		<local name="current_time" />
+		<tstamp>
+			<format property="current_time" pattern="HH:mm:ss" locale="en,US" />
+		</tstamp>
+		<input message="${current_time} : @{message}" validargs="y,n,Y,N" addproperty="@{propertyName}" />
+	</sequential>
+</macrodef>
+
+<target name="DeployPackages.check">
+	<log.input message="Deploy Packages?" propertyName="package" />
+	<condition property="deployPackages">
+		<or>
+			<equals arg1="y" arg2="${package}" />
+			<equals arg1="Y" arg2="${package}" />
+		</or>
+	</condition>
+</target>
+
+<target name ="ifyes" depends="proxy">
+	<sf:deploy username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" deployRoot="/src" rollbackOnError="true"/>
+</target>
+<target name ="ifN" depends ="proxy">
+	<echo> Build aborted by user</echo>
+</target>
+<target name ="ify" depends="proxy">
+	<sf:deploy username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" deployRoot="/src" rollbackOnError="true"/>
+</target>
+<target name ="ifY" depends="proxy">
+	<sf:deploy username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" deployRoot="/src" rollbackOnError="true"/>
+</target>
+<target name ="ifn" depends ="proxy">
+	<echo> Build aborted by user</echo>
+</target>
+<target name="pullfromsf" depends="proxy">
+	<sf:retrieve username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" retrieveTarget="src" unpackaged="../package.xml"/>
+	<sequential>
+		<git command = "checkout">
+			<args>
+				<arg value = "src/package.xml"/>
+			</args>
+		</git>
+		<echo>Your Changes pulled successfully!!!</echo>
+	</sequential>
+</target>
+<target name="RetriveMyChangesFromSandbox" depends="proxy">
+	<sf:retrieve username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" retrieveTarget="src" unpackaged="../package.xml"/>
+	<sequential>
+		<git command = "checkout">
+			<args>
+				<arg value = "src/package.xml"/>
+			</args>
+		</git>
+		<echo>Your Changes pulled successfully!!!</echo>
+	</sequential>
+
+</target>
+
+<target name="RetrieveLocalChanges" depends="proxy">
+	<!-- 	Retrieve data from Sandbox and store it in your local folder, The package.xml will be stored in local	-->
+
+	<sf:retrieve username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" retrieveTarget="local" unpackaged="local/package.xml"/>
+	<git-checkout-status-merge-undeploy-deploy branch="${branch}" />
+</target>
+
+<target name="RetriveFromSandbox" depends="proxy">
+	<!-- 	Retrive data from Sandbox and store it in your Local GIT SRC folder, The package.xml will be stored in RetriveSandboxPackage	-->
+	<!--	Developer need to Create a folder inside Sample Folder of ANT and Name it "RetriveSandboxPackage"	-->
+
+	<sf:retrieve username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" retrieveTarget="src" unpackaged="src/package.xml"/>
+
+	<sequential>
+		<echo>If you have any uncommit changes in your local, then Git will not allow you to switch branch</echo>
+		<git command = "checkout">
+			<args>
+				<arg value = "@{branch}"/>
+				<arg value = "@{dest}" />
+			</args>
+		</git>
+		<git command = "status" />
+		<echo>NOTE: Please add your changes to your remote using add, commit and push command manually</echo>
+	</sequential>
+</target>
+
+<target name="CopyLocalChangesToSrc">
+	<copy todir="src">
+		<fileset dir="local">
+			<exclude name="**/package.xml"/>
+		</fileset>
+	</copy>
+</target>
+
+<!-- This script will be used by admin to pick a specific commit and merge it to DevAll or any other asked branch -->
+
+<target name="applyCommitToDevAll" depends="proxy">
+	<sequential>
+		<input message="Input commit hash " addproperty="commithash"/>
+		<git command = "checkout">
+			<args>
+				<arg value = "devdp"/>
+			</args>
+		</git>
+		<git command = "cherry-pick">
+			<args>
+				<arg value = "${commithash}"/>
+			</args>
+		</git>
+		<git command = "push" />
+	</sequential>
+
+	<!--<sf:deploy username="${sf.username1}" password="${sf.password1}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" deployRoot="/src" rollbackOnError="true"/>-->
+
+</target>
+
+
+<target name="RemoveDestrictivePackageFromSandbox" depends="proxy">
+	<!-- It will pick the components which you want to delete from your Sandbox -->
+	<!-- It will pick the Components from Destrictive changes from Folder PackagetoRemoveFromSandboxAll-->
+	<!-- All developers need to Create a folder and rename with "PackagetoRemoveFromSandbox" and Peast the destrictive Change and Package.xml File -->
+
+	<sf:deploy username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" deployRoot="../PackagetoRemoveFromSandbox"/>
+</target>
+
+<target name="DeployChangesInDevXXtoSandbox" depends="proxy">
+	<!-- Deploy the latest Code Present in your DevXX :Local Repo to Your Sandbox -->
+	<!-- It will pick all the changes Present in CIBSF/SRC and deploy it to Sandbox -->
+
+	<sf:deploy username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" deployRoot="/src" rollbackOnError="true"/>
+</target>
+
+
+
+<target name="Retrivedata" depends="proxy">
+	<!-- 	Retrive data from Sandbox and store it in your Local GIT SRC folder, The package.xml will be stored in RetriveSandboxPackage	-->
+	<!--	Developer need to Create a folder inside Sample Folder of ANT and Name it "RetriveSandboxPackage"	-->
+
+	<sf:retrieve username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" retrieveTarget="src" unpackaged="src/package.xml"/>
+</target>
+
+<target name="pushtosfdevall" depends="proxy,LastCommitId,generateDiffFileForPoc,readDiff,LastCommitId">
+	<sf:deploy username="${sf.ibdevall.username}" password="${sf.ibdevall.password}" serverurl="${sf.ibdevall.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<target name="pushtosfdevbuddy" depends="proxy,LastCommitId,generateDiffFileForPoc,readDiff,LastCommitId">
+	<sf:deploy username="${sf.ibdevbuddy.username}" password="${sf.ibdevbuddy.password}" serverurl="${sf.ibdevbuddy.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<target name="pushtosfqa" depends="proxy,LastCommitId,generateDiffFileForPoc,readDiff,LastCommitId">
+	<sf:deploy username="${sf.ibqa.username}" password="${sf.ibqa.password}" serverurl="${sf.ibqa.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<target name="pushtosf" depends="proxy,LastCommitId,generateDiffFileForPoc,readDiff,LastCommitId">
+	<sf:deploy username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<target name="pushtosfdevallq" depends="proxy,LastCommitId,generateDiffFileForJan09,readDiff,LastCommitId">
+	<sf:deploy username="${sf.ibdevall.username}" password="${sf.ibdevall.password}" serverurl="${sf.ibdevall.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<target name="pushtosfdevbuddyq" depends="proxy,LastCommitId,generateDiffFileForJan09,readDiff,LastCommitId">
+	<sf:deploy username="${sf.ibdevbuddy.username}" password="${sf.ibdevbuddy.password}" serverurl="${sf.ibdevbuddy.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<target name="pushtosfqaq" depends="proxy,LastCommitId,generateDiffFileForJan09,readDiff,LastCommitId">
+	<sf:deploy username="${sf.ibqa.username}" password="${sf.ibqa.password}" serverurl="${sf.ibqa.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<target name="pushtosfq" depends="proxy,LastCommitId,generateDiffFileForJan09,readDiff,LastCommitId">
+	<sf:deploy username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<target name="pushtosfdevall4" depends="proxy,LastCommitId,generateDiffFileForFeb15,readDiff,LastCommitId">
+	<sf:deploy username="${sf.ibdevall.username}" password="${sf.ibdevall.password}" serverurl="${sf.ibdevall.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<target name="pushtosfdevbuddy4" depends="proxy,LastCommitId,generateDiffFileForFeb15,readDiff,LastCommitId">
+	<sf:deploy username="${sf.ibdevbuddy.username}" password="${sf.ibdevbuddy.password}" serverurl="${sf.ibdevbuddy.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<target name="pushtosfqa4" depends="proxy,LastCommitId,generateDiffFileForFeb15,readDiff,LastCommitId">
+	<sf:deploy username="${sf.ibqa.username}" password="${sf.ibqa.password}" serverurl="${sf.ibqa.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+
+<target name="pushtosf4" depends="proxy,LastCommitId,generateDiffFileForFeb15,readDiff,LastCommitId">
+	<sf:deploy username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<!-- sprint 5 ant command start -->
+<target name="pushtosfdevall5" depends="proxy,LastCommitId,generateDiffFileForMarch09,readDiff,LastCommitId">
+	<sf:deploy username="${sf.ibdevall.username}" password="${sf.ibdevall.password}" serverurl="${sf.ibdevall.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<target name="pushtosfdevbuddy5" depends="proxy,LastCommitId,generateDiffFileForMarch09,readDiff,LastCommitId">
+	<sf:deploy username="${sf.ibdevbuddy.username}" password="${sf.ibdevbuddy.password}" serverurl="${sf.ibdevbuddy.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<target name="pushtosfqa5" depends="proxy,LastCommitId,generateDiffFileForMarch09,readDiff,LastCommitId">
+	<sf:deploy username="${sf.ibqa.username}" password="${sf.ibqa.password}" serverurl="${sf.ibqa.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<target name="pushtosf5" depends="proxy,LastCommitId,generateDiffFileForMarch09,readDiff,LastCommitId">
+	<sf:deploy username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+<!-- sprint 5 ant command end -->
+
+<!-- ant command for skipping dashboard , reports and reporttypes starts -->
+<target name="pushtosfdevall51" depends="proxy,LastCommitId,generateDiffFileForMarch25,readDiff,LastCommitId">
+	<sf:deploy username="${sf.ibdevall.username}" password="${sf.ibdevall.password}" serverurl="${sf.ibdevall.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<target name="pushtosfdevbuddy51" depends="proxy,LastCommitId,generateDiffFileForMarch25,readDiff,LastCommitId">
+	<sf:deploy username="${sf.ibdevbuddy.username}" password="${sf.ibdevbuddy.password}" serverurl="${sf.ibdevbuddy.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<target name="pushtosfqa51" depends="proxy,LastCommitId,generateDiffFileForMarch25,readDiff,LastCommitId">
+	<sf:deploy username="${sf.ibqa.username}" password="${sf.ibqa.password}" serverurl="${sf.ibqa.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<target name="pushtosf51" depends="proxy,LastCommitId,generateDiffFileForMarch25,readDiff,LastCommitId">
+	<sf:deploy username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+<!-- ant command for skipping dashboard , reports and reporttypes ends -->
+
+<!-- ant command for April 2019 month -->
+<target name="pushtosfdevallaf" depends="proxy,LastCommitId,generateDiffFileForApril01,readDiff,LastCommitId">
+	<sf:deploy username="${sf.ibdevall.username}" password="${sf.ibdevall.password}" serverurl="${sf.ibdevall.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<target name="pushtosfdevbuddyaf" depends="proxy,LastCommitId,generateDiffFileForApril01,readDiff,LastCommitId">
+	<sf:deploy username="${sf.ibdevbuddy.username}" password="${sf.ibdevbuddy.password}" serverurl="${sf.ibdevbuddy.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<target name="pushtosfqaaf" depends="proxy,LastCommitId,generateDiffFileForApril01,readDiff,LastCommitId">
+	<sf:deploy username="${sf.ibqa.username}" password="${sf.ibqa.password}" serverurl="${sf.ibqa.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+<target name="pushtosfaf" depends="proxy,LastCommitId,generateDiffFileForApril01,readDiff,LastCommitId">
+	<sf:deploy username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+<!-- ant command for April 2019 month -->
+
+<target name="setOppPrivate" depends="proxy,LastCommitId,OppPrivate,readDiff,LastCommitId">
+	<sf:deploy username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" ignoreWarnings="TRUE" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+
+<target name="PocDeploy" depends="proxy,LastCommitId,generateDiffFileForPoc,readDiff,LastCommitId">
+	<sf:deploy username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+
+
+<!--	Partial Deployment Clubed Code: Start -->
+<target name="PartialDeploy" depends="proxy,LastCommitId,generateDiffFile,readDiff,LastCommitId">
+	<sf:deploy username="${sf.username}" password="${sf.password}" serverurl="${sf.serverurl}" maxPoll="${sf.maxPoll}" deployRoot="../PartialDeployFolder/src" allowMissingFiles = "TRUE" rollbackOnError="true"/>
+</target>
+<!--	Generate LastCommitId File-->
+<target name="LastCommitId">
+	<exec executable="git" failonerror="true" output="../LastCommitId.txt">
+		<arg value="rev-parse" />
+		<arg value="HEAD" />
+	</exec>
+</target>
+<!-- Generate Diff	-->
+<target name="generateDiffFile">
+	<input message="Enter commitId from which deploy should begin " addproperty="lastCommit"/>
+	<exec executable="git" failonerror="true" output="../diff.txt">
+		<arg value="diff" />
+		<arg value="--name-only" />
+		<arg value="${lastCommit}" />
+		<arg value="HEAD" />
+		<arg value="--" />
+	</exec>
+</target>
+<target name="generateDiffFileForPoc">
+	<exec executable="git" failonerror="true" output="../diff.txt">
+		<arg value="diff" />
+		<arg value="--name-only" />
+		<arg value="0d85196c748b752d414287f675ead82c9eef3d86" />
+		<arg value="HEAD" />
+		<arg value="--" />
+	</exec>
+</target>
+<target name="OppPrivate">
+	<exec executable="git" failonerror="true" output="../diff.txt">
+		<arg value="log" />
+		<arg value="--name-only" />
+		<arg value="--full-index" />
+		<arg value="cf9d64f41b9693941fa4a2a7dfb4c021b5981f1e..993701bd6e6ba369f03651d57cb76669c131f153" />
+	</exec>
+</target>
+<target name="generateDiffFileForJan09">
+	<exec executable="git" failonerror="true" output="../diff.txt">
+		<arg value="log" />
+		<arg value="--name-only" />
+		<arg value="--full-index" />
+		<arg value="dea341e124a15a367cfec50eecd71c691ccaa6ce..HEAD" />
+	</exec>
+</target>
+<target name="generateDiffFileForFeb15">
+	<exec executable="git" failonerror="true" output="../diff.txt">
+		<arg value="log" />
+		<arg value="--name-only" />
+		<arg value="--full-index" />
+		<arg value="88425aefaa7c8883390bc247db1f50b3e2069ccb..HEAD" />
+	</exec>
+</target>
+<!-- sprint 5 starts -->
+<target name="generateDiffFileForMarch09">
+	<exec executable="git" failonerror="true" output="../diff.txt">
+		<arg value="log" />
+		<arg value="--name-only" />
+		<arg value="--full-index" />
+		<arg value="c9d173fa5877de528591ce2f4cea1c0e6eea9698..HEAD" />
+	</exec>
+</target>
+<!-- sprint 5 ends -->
+<!-- git diff for skipping dashboard , reports and reporttypes starts -->
+<target name="generateDiffFileForMarch25">
+	<exec executable="git" failonerror="true" output="../diff.txt">
+		<arg value="log" />
+		<arg value="--name-only" />
+		<arg value="--full-index" />
+		<arg value="aa1bb6097bb1581728acf149c5bc2df32f951705..HEAD" />
+	</exec>
+</target>
+<!-- git diff for skipping dashboard , reports and reporttypes ends -->
+<!-- git diff for April 2019 -->
+<target name="generateDiffFileForApril01">
+	<exec executable="git" failonerror="true" output="../diff.txt">
+		<arg value="log" />
+		<arg value="--name-only" />
+		<arg value="--full-index" />
+		<arg value="0ee3e144e17211b81e9d8044e77145577ad201b6..HEAD" />
+	</exec>
+</target>
+<!-- git diff for April 2019 -->
+<!--	Generate Temp Folder for Partial Deployment	-->
+<target name="readDiff">
+<property name="deployReportsAndDashboards" value="${deployReportsAndDashboards}" />
+	<delete dir="../PartialDeployFolder"/>
+	<script language="javascript"><![CDATA[
+	  function copyFiles() {
+		var deployReportsAndDashboards = CIB.getProperty("deployReportsAndDashboards");
+		java.lang.System.out.println(deployReportsAndDashboards);
+		//return;
+		java.lang.System.out.println('Creating PartialDeployFolder...');
+		createDirectoryIfMissing("..\\PartialDeployFolder");
+		createDirectoryIfMissing("..\\PartialDeployFolder/src");
+		var displayskipreportsmsg = true;
+		var lines = java.nio.file.Files.readAllLines(java.nio.file.Paths.get('../diff.txt'), java.nio.charset.Charset.forName('UTF-8'));
+		for (var i = 0 ; i < lines.size(); i++) {
+			//ignore paths that does not contain src directory, we don't need to copy those
+			if (lines[i].indexOf('src/') == -1) continue;
+			if (deployReportsAndDashboards!== 'true') {
+				if (displayskipreportsmsg) {
+				  java.lang.System.out.println('Skipping Reports, Report Types & Dashboards from deployment');
+				  displayskipreportsmsg = false;
+				}
+				//skipping reports, dashboards and reporttypes folders from deployment
+				if (lines[i].indexOf('reports/') !== -1) continue;
+				if (lines[i].indexOf('dashboards/') !== -1) continue;
+				if (lines[i].indexOf('reportTypes/') !== -1) continue;
+			}
+			splitArray= lines[i].split("/");
+			rootPath = "";
+			var isAuraBundle = false;
+			var auraFolderName = '';
+			for (var j = 0 ; j < splitArray.length - 1; j++) {
+				if (isAuraBundle) auraFolderName = splitArray[j];
+				rootPath = rootPath + "/" + splitArray[j];
+				createDirectoryIfMissing("..\\PartialDeployFolder" + rootPath);
+				if (splitArray[j] == 'aura') isAuraBundle = true;
+			}
+			rootPath = rootPath + "/";
+			
+			if (isAuraBundle) { //copy all possible aura bundle files
+				//java.lang.System.out.println('copying aurafolder: ' + auraFolderName);
+				source1 = new java.io.File("." + rootPath + auraFolderName + '.auradoc');
+				dest1 = new java.io.File("..\\PartialDeployFolder"  + rootPath + auraFolderName + '.auradoc');
+				if (source1.exists() && !dest1.exists()) java.nio.file.Files.copy(source1.toPath(), dest1.toPath());
+
+				source1 = new java.io.File("." + rootPath + auraFolderName + '.cmp');
+				dest1 = new java.io.File("..\\PartialDeployFolder"  + rootPath + auraFolderName + '.cmp');
+				if (source1.exists() && !dest1.exists()) java.nio.file.Files.copy(source1.toPath(), dest1.toPath());
+
+				source1 = new java.io.File("." + rootPath + auraFolderName + '.cmp-meta.xml');
+				dest1 = new java.io.File("..\\PartialDeployFolder"  + rootPath + auraFolderName + '.cmp-meta.xml');
+				if (source1.exists() && !dest1.exists()) java.nio.file.Files.copy(source1.toPath(), dest1.toPath());
+				
+
+				source1 = new java.io.File("." + rootPath + auraFolderName + '.css');
+				dest1 = new java.io.File("..\\PartialDeployFolder"  + rootPath + auraFolderName + '.css');
+				if (source1.exists() && !dest1.exists()) java.nio.file.Files.copy(source1.toPath(), dest1.toPath());
+
+
+				source1 = new java.io.File("." + rootPath + auraFolderName + '.design');
+				dest1 = new java.io.File("..\\PartialDeployFolder"  + rootPath + auraFolderName + '.design');
+				if (source1.exists() && !dest1.exists()) java.nio.file.Files.copy(source1.toPath(), dest1.toPath());
+
+
+				source1 = new java.io.File("." + rootPath + auraFolderName + '.svg');
+				dest1 = new java.io.File("..\\PartialDeployFolder"  + rootPath + auraFolderName + '.svg');
+				if (source1.exists() && !dest1.exists()) java.nio.file.Files.copy(source1.toPath(), dest1.toPath());
+
+
+				source1 = new java.io.File("." + rootPath + auraFolderName + 'Controller.js');
+				dest1 = new java.io.File("..\\PartialDeployFolder"  + rootPath + auraFolderName + 'Controller.js');
+				if (source1.exists() && !dest1.exists()) java.nio.file.Files.copy(source1.toPath(), dest1.toPath());
+
+
+				source1 = new java.io.File("." + rootPath + auraFolderName + 'Helper.js');
+				dest1 = new java.io.File("..\\PartialDeployFolder"  + rootPath + auraFolderName + 'Helper.js');
+				if (source1.exists() && !dest1.exists()) java.nio.file.Files.copy(source1.toPath(), dest1.toPath());
+
+
+				source1 = new java.io.File("." + rootPath + auraFolderName + 'Renderer.js');
+				dest1 = new java.io.File("..\\PartialDeployFolder"  + rootPath + auraFolderName + 'Renderer.js');
+				if (source1.exists() && !dest1.exists()) java.nio.file.Files.copy(source1.toPath(), dest1.toPath());
+			}
+			
+			//all required folders create. copy the file now.
+			source = new java.io.File( "." + rootPath + splitArray[splitArray.length - 1] );
+				dest = new java.io.File("..\\PartialDeployFolder" + rootPath +  splitArray[splitArray.length - 1] );
+				if (source.exists() && !dest.exists())java.nio.file.Files.copy(source.toPath(), dest.toPath());
+				
+				//copy meta xml for corresponding file if it exists.
+			targetmetaxmlpointer = new java.io.File("..\\PartialDeployFolder" + rootPath +  splitArray[splitArray.length - 1] + "-meta.xml" );
+			sourcemetaxmlPointer = new java.io.File( "." + rootPath + splitArray[splitArray.length - 1] + "-meta.xml" );
+			if (sourcemetaxmlPointer.exists()&& !targetmetaxmlpointer.exists()) {
+			  java.nio.file.Files.copy(sourcemetaxmlPointer.toPath(), targetmetaxmlpointer.toPath());
+			}
+		}
+		//copy package.xml if it doesn't exist
+		targetpackagexmlpath = "..\\PartialDeployFolder/src/package.xml";
+		packagexmlPointer = new java.io.File(targetpackagexmlpath);
+		if (!packagexmlPointer.exists()) {
+		  packagexmlSource = new java.io.File("./src/package.xml");
+		  java.nio.file.Files.copy(packagexmlSource.toPath(), packagexmlPointer.toPath());
+		  java.lang.System.out.println("copied package.xml");
+		}
+		java.lang.System.out.println('Deploy Started...');
+	  }
+	  
+	  function createDirectoryIfMissing(dirfullPath) {
+			dirPointer = new java.io.File(dirfullPath);
+		  if (!dirPointer.exists()) {
+			  var msg = dirPointer.mkdir() ? ''  : ("*****Failed to create directory****" + dirPointer);
+			  if (msg != '') java.lang.System.out.println(msg);
+		  }
+	  }
+	  
+  copyFiles(); //copy files to partialdeployfolder
+	]]>		</script>
+</target>
+<!--	Partial Deployment Clubed Code: End -->
+<!-- Proxy Setup-->
